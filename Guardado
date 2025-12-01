@@ -1,0 +1,318 @@
+import pygame
+import math
+import time
+import pickle  # <-- Agregar este import
+
+# ... (todo el código anterior se mantiene igual) ...
+
+class Persistencia:
+    def __init__(self):
+        self.cantidad = 0
+    
+    def guarda(self, escenario, jugador, nombre_archivo="partida_guardada.cc"):
+        try:
+            datos = {
+                'escenario': escenario,
+                'jugador': jugador
+            }
+            with open(nombre_archivo, 'wb') as fos:
+                oos = pickle.Pickler(fos)
+                oos.dump(datos)
+            return True
+        except Exception as e:
+            print(f"Error al guardar: {e}")
+            return False
+    
+    def rescatar(self, nombre_archivo="partida_guardada.cc"):
+        try:
+            with open(nombre_archivo, 'rb') as fis:
+                ois = pickle.Unpickler(fis)
+                datos = ois.load()
+                return datos['escenario'], datos['jugador']
+        except Exception as e:
+            print(f"Error al rescatar: {e}")
+            return None, None
+
+class Vista:
+    def __init__(self, escenario:Escenario, jugador:Jugador, ancho_ventana:int=800, alto_ventana:int=600):
+        pygame.init()
+        self.jugador = jugador
+        self.escenario = escenario
+        self.ancho_ventana = ancho_ventana
+        self.barra_ancho = 200
+
+        info = pygame.display.Info()
+        pantalla_alto = info.current_h
+        margen = 50
+        celda_alto = min(20, (pantalla_alto - margen) // self.escenario.alto)
+        self.alto_ventana = celda_alto * self.escenario.alto
+
+        self.mensajes = []
+        self.tiempo_mensaje = 0
+        
+        # SCROLL para la barra lateral completa
+        self.sidebar_scroll = 0
+        self.sidebar_line_h = 25
+        self.sidebar_scroll_speed = 3
+        
+        # Sistema de persistencia
+        self.persistencia = Persistencia()
+        
+        self.ventana = pygame.display.set_mode((self.ancho_ventana, self.alto_ventana))
+        pygame.display.set_caption("GeoZ4 - Simulación de Supervivencia Zombie")
+        self.reloj = pygame.time.Clock()
+        self.correr_simulacion()
+
+    def ejecutar_turno(self):
+        """Ejecuta el turno de todas las entidades y registra eventos."""
+        # Simular turno del escenario (zombies atacan civiles, etc.)
+        eventos = self.escenario.simular_turno()
+        for categoria, mensaje in eventos:
+            self.mensajes.append(mensaje)
+        
+        # Mantener solo los últimos mensajes
+        while len(self.mensajes) > 20:
+            self.mensajes.pop(0)
+
+    def correr_simulacion(self):
+        corriendo = True
+        contador_turnos = 0
+        contador_movimiento = 0
+        velocidad_movimiento = 8
+
+        while corriendo:
+            for evento in pygame.event.get():
+                if evento.type == pygame.QUIT:
+                    corriendo = False
+
+                elif evento.type == pygame.KEYDOWN:
+                    if evento.key == pygame.K_w:
+                        self.jugador.mover("W", self.escenario)
+                    elif evento.key == pygame.K_s:
+                        self.jugador.mover("S", self.escenario)
+                    elif evento.key == pygame.K_a:
+                        self.jugador.mover("A", self.escenario)
+                    elif evento.key == pygame.K_d:
+                        self.jugador.mover("D", self.escenario)
+                    elif evento.key == pygame.K_e:
+                        resultado = self.jugador.interactuar(self.escenario)
+                        if resultado:
+                            self.mensajes.append(resultado)
+                            if len(self.mensajes) > 20:
+                                self.mensajes.pop(0)
+                    elif evento.key == pygame.K_g:  # <-- Tecla G para guardar
+                        if self.persistencia.guarda(self.escenario, self.jugador):
+                            self.mensajes.append("Partida guardada exitosamente!")
+                        else:
+                            self.mensajes.append("Error al guardar la partida!")
+                        if len(self.mensajes) > 20:
+                            self.mensajes.pop(0)
+                    elif evento.key == pygame.K_c:  # <-- Tecla C para cargar
+                        escenario_cargado, jugador_cargado = self.persistencia.rescatar()
+                        if escenario_cargado and jugador_cargado:
+                            self.escenario = escenario_cargado
+                            self.jugador = jugador_cargado
+                            self.mensajes.append("Partida cargada exitosamente!")
+                        else:
+                            self.mensajes.append("Error al cargar la partida!")
+                        if len(self.mensajes) > 20:
+                            self.mensajes.pop(0)
+
+                elif evento.type == pygame.MOUSEWHEEL:
+                    # Scroll de la barra lateral con rueda del ratón
+                    delta_px = -evento.y * self.sidebar_line_h * self.sidebar_scroll_speed
+                    self.sidebar_scroll += delta_px
+
+            self.ventana.fill((0, 0, 0))
+            self.dibujar_escenario()
+            self.dibujar_barra_lateral()
+
+            pygame.display.flip()
+            contador_turnos += 1
+            if contador_turnos >= 30:
+                self.ejecutar_turno()
+                contador_turnos = 0
+
+            if not self.jugador.con_vida:
+                if not any("ha muerto" in m.lower() for m in self.mensajes):
+                    self.mensajes.append("El jugador ha muerto. Fin de la simulación.")
+                self.ventana.fill((0, 0, 0))
+                self.dibujar_escenario()
+                self.dibujar_barra_lateral()
+                pygame.display.flip()
+                pygame.time.delay(3000)
+                corriendo = False
+                break
+
+            self.reloj.tick(30)
+        pygame.quit()
+
+    def dibujar_escenario(self):
+        celda_ancho = (self.ancho_ventana - self.barra_ancho) // self.escenario.ancho
+        celda_alto = self.alto_ventana // self.escenario.alto
+
+        for x in range(self.escenario.ancho):
+            for y in range(self.escenario.alto):
+                celda = self.escenario.tablero[x][y]
+                color_celda = (34, 139, 34)
+
+                if celda.tipo == "ciudad":
+                    color_celda = (169, 169, 169)
+                elif celda.tipo == "zona_zombie":
+                    color_celda = (255, 0, 0)
+                elif celda.tipo == "campo":
+                    color_celda = (34, 139, 34)
+                elif celda.tipo == "lago":
+                    color_celda = (0, 191, 255)
+                elif celda.tipo == "rio":
+                    color_celda = (30, 144, 255)
+                elif celda.tipo == "bosque":
+                    color_celda = (0, 100, 0)
+                elif celda.tipo == "mina":
+                    color_celda = (139, 69, 19)
+                
+                pygame.draw.rect(self.ventana, color_celda, (x * celda_ancho, y * celda_alto, celda_ancho, celda_alto))
+
+                for entidad in celda.entidades:
+                    if entidad is self.jugador:
+                        color_entidad = (255, 255, 255)
+                    elif isinstance(entidad, Civil_Normal):
+                        color_entidad = (0, 0, 255)
+                    elif isinstance(entidad, Atacante):
+                        color_entidad = (0, 255, 255)
+                    elif isinstance(entidad, Defensor):
+                        color_entidad = (255, 165, 0)
+                    elif isinstance(entidad, Productor):
+                        color_entidad = (255, 192, 203)
+                    elif isinstance(entidad, Cientifico):
+                        color_entidad = (75, 0, 150)
+                    elif isinstance(entidad, Medico):
+                        color_entidad = (0, 255, 0)
+                    elif isinstance(entidad, Verde):
+                        color_entidad = (34, 119, 34)
+                    elif isinstance(entidad, Morado):
+                        color_entidad = (128, 0, 128)
+                    elif isinstance(entidad, Amarillo):
+                        color_entidad = (255, 255, 0)
+                    else:
+                        continue
+
+                    pygame.draw.circle(self.ventana, color_entidad,
+                                       (x * celda_ancho + celda_ancho // 2,
+                                        y * celda_alto + celda_alto // 2),
+                                       min(celda_ancho, celda_alto) // 4)
+
+    def dibujar_barra_lateral(self):
+        fuente = pygame.font.SysFont(None, 20)
+        x_base = self.ancho_ventana - self.barra_ancho + 10
+        
+        pygame.draw.rect(self.ventana, (30, 30, 30), (self.ancho_ventana - self.barra_ancho, 0, self.barra_ancho, self.alto_ventana))
+
+        # Construir lista de líneas para la barra lateral
+        lines = []
+        lines.append("🧍 JUGADOR")
+        lines.append(" ----------CONTROLES---------- ")
+        lines.append("W = Arriba, A = Izquierda")
+        lines.append("S = Abajo, D = Derecha")
+        lines.append("E: Interactuar")
+        lines.append("G: Guardar partida")  # <-- Agregar información del guardado
+        lines.append("C: Cargar partida")   # <-- Agregar información de carga
+        lines.append(" ---------------------------- ")
+        lines.append(f"Vida: {self.jugador.vida}")
+        lines.append(f"Energía: {self.jugador.energia}")
+        lines.append(f"Infectado: {'Sí' if self.jugador.estado else 'No'}")
+        lines.append(f"Posición: ({self.jugador.posicion_x}, {self.jugador.posicion_y})")
+        lines.append("Inventario:")
+        for item in self.jugador.inventario:
+            lines.append(f" - {item}")
+        lines.append("")
+        lines.append("Últimas acciones:")
+        for mensaje in reversed(self.mensajes[-10:]):
+            lines.append(f"• {mensaje}")
+
+        # Calcular scroll
+        total_lines = len(lines)
+        total_height = total_lines * self.sidebar_line_h
+        visible_height = self.alto_ventana
+        max_scroll_px = max(0, total_height - visible_height)
+
+        # Limitar scroll
+        if self.sidebar_scroll < 0:
+            self.sidebar_scroll = 0
+        if self.sidebar_scroll > max_scroll_px:
+            self.sidebar_scroll = max_scroll_px
+
+        start_line = int(self.sidebar_scroll // self.sidebar_line_h)
+        y_offset_px = -(self.sidebar_scroll % self.sidebar_line_h)
+
+        # Dibujar líneas visibles
+        y = y_offset_px + 20
+        max_visible_lines = visible_height // self.sidebar_line_h + 2
+        end_line = min(total_lines, start_line + max_visible_lines)
+
+        for idx in range(start_line, end_line):
+            text = lines[idx]
+            if text.startswith("•"):
+                color = (200, 200, 100)
+            else:
+                color = (255, 255, 255)
+            render = fuente.render(text, True, color)
+            self.ventana.blit(render, (x_base, y))
+            y += self.sidebar_line_h
+
+        # Dibujar scrollbar si hace falta
+        if total_height > visible_height:
+            bar_w = 6
+            bar_x = self.ancho_ventana - 12
+            bar_y = 4
+            bar_h = visible_height - 8
+            pygame.draw.rect(self.ventana, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h))
+            
+            handle_h = max(20, int(bar_h * (visible_height / total_height)))
+            if max_scroll_px > 0:
+                handle_y = bar_y + int((bar_h - handle_h) * (self.sidebar_scroll / max_scroll_px))
+            else:
+                handle_y = bar_y
+            pygame.draw.rect(self.ventana, (160, 160, 160), (bar_x, handle_y, bar_w, handle_h))
+
+# Configuración del escenario (se mantiene igual)
+escenario = Escenario(50, 50)
+
+escenario.definir_ciudad(17, 17, 16, 16)
+
+escenario.definir_zona_zombie(0, 0, 5, 5)
+escenario.definir_zona_zombie(45, 0, 5, 5)
+escenario.definir_zona_zombie(0, 45, 5, 5)
+escenario.definir_zona_zombie(45, 45, 5, 5)
+
+escenario.definir_lago(20, 40, 5, 5)
+escenario.definir_lago(5, 5, 6, 6)
+escenario.definir_lago(44, 15, 4, 4)
+escenario.definir_lago(44, 11, 5, 5)
+escenario.definir_lago(44, 19, 5, 5)
+
+escenario.definir_rio(7, 14, 30, 2)
+escenario.definir_rio(33, 33, 2, 10)
+escenario.definir_bosque(5, 20, 8, 8)
+escenario.definir_bosque(35, 5, 10, 10)
+
+# Poblar ciudad
+escenario.poblar_ciudad(
+    cantidad_normales=10,
+    cantidad_atacantes=5,
+    cantidad_defensores=3,
+    cantidad_productores=4,
+    cantidad_cientificos=2,
+    cantidad_medicos=3,
+    inicio_x=17, inicio_y=17, ancho=16, alto=16
+)
+
+# Crear jugador
+jugador = Jugador(posicion_x=24, posicion_y=24)
+escenario.agregar_personaje(jugador)
+
+# Iniciar vista
+if __name__ == "__main__":
+    ancho_total = 1200
+    alto_total = 800
+    vista = Vista(escenario, jugador, ancho_ventana=ancho_total, alto_ventana=alto_total)
